@@ -2,7 +2,8 @@
 
 Lifecycle
 ---------
-1. async_pre_call_hook      — before the call:   create escrow
+1. async_pre_call_hook      — before the call:   create escrow, redact PII,
+                               inject structured-output schema
 2. async_log_success_event  — after success:      release escrow
 3. async_log_failure_event  — after failure:      refund escrow
 """
@@ -17,6 +18,8 @@ from typing import Any
 from a2a_settlement.client import SettlementExchangeClient
 
 from .config import SettlementConfig
+from .redaction import PiiRedactor, redact_payload
+from .schema import inject_response_format
 
 try:
     from litellm.integrations.custom_logger import CustomLogger
@@ -31,12 +34,18 @@ except ImportError:
 
 logger = logging.getLogger("a2a_settlement.litellm")
 
-_ESCROW_META_KEY = "_a2a_se_escrow_id"
-_MODEL_META_KEY  = "_a2a_se_model"
+_ESCROW_META_KEY     = "_a2a_se_escrow_id"
+_MODEL_META_KEY      = "_a2a_se_model"
+_REDACTION_META_KEY  = "_a2a_se_redaction_map"
 
 
 class SettlementHandler(CustomLogger):
     """LiteLLM callback handler that settles A2A agent calls via escrow.
+
+    The pre-call hook also:
+    * **Redacts PII** from message contents before they leave the proxy.
+    * **Injects response_format** to force the LLM into structured JSON
+      mode (mediator verdict schema).
 
     Usage in proxy_config.yaml::
 
@@ -50,13 +59,19 @@ class SettlementHandler(CustomLogger):
         litellm.callbacks = [SettlementHandler(SettlementConfig(...))]
     """
 
-    def __init__(self, config: SettlementConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: SettlementConfig | None = None,
+        *,
+        redactor: PiiRedactor | None = None,
+    ) -> None:
         super().__init__()
         self.config = config or SettlementConfig()
         self._client = SettlementExchangeClient(
             base_url=self.config.exchange_url,
             api_key=self.config.payer_api_key,
         )
+        self._redactor = redactor or PiiRedactor()
 
     # ------------------------------------------------------------------
     # Pre-call hook
@@ -70,6 +85,23 @@ class SettlementHandler(CustomLogger):
         call_type: str,
     ) -> dict | None:
         model: str = data.get("model", "")
+
+        # --- PII redaction (runs for ALL models, not just a2a/) -----------
+        try:
+            token_map = redact_payload(data, self._redactor)
+            if token_map:
+                if "metadata" not in data or data["metadata"] is None:
+                    data["metadata"] = {}
+                data["metadata"][_REDACTION_META_KEY] = token_map
+                logger.info(
+                    "Redacted %d PII token(s) from payload for %s",
+                    len(token_map), model,
+                )
+        except Exception:
+            logger.warning("PII redaction failed — proceeding unredacted", exc_info=True)
+
+        # --- Structured JSON output enforcement ---------------------------
+        inject_response_format(data)
 
         if not self.config.should_settle(model):
             return data

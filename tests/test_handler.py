@@ -11,8 +11,10 @@ from litellm_a2a_settlement.handler import (
     SettlementHandler,
     _ESCROW_META_KEY,
     _MODEL_META_KEY,
+    _REDACTION_META_KEY,
     _infer_task_type,
 )
+from litellm_a2a_settlement.schema import RESPONSE_FORMAT_PARAM
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +227,55 @@ class TestFailureHook:
 
         call_kwargs = handler._client.refund_escrow.call_args.kwargs
         assert len(call_kwargs["reason"]) <= 256
+
+
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Pre-call: PII redaction
+# ---------------------------------------------------------------------------
+
+class TestPreCallRedaction:
+    async def test_redacts_pii_from_messages(self, handler, mock_auth, mock_cache):
+        data = call_data("gpt-4o")
+        data["messages"] = [{"role": "user", "content": "Email: alice@test.com"}]
+
+        result = await handler.async_pre_call_hook(mock_auth, mock_cache, data, "completion")
+
+        assert "alice@test.com" not in result["messages"][0]["content"]
+        assert _REDACTION_META_KEY in result["metadata"]
+
+    async def test_no_pii_no_redaction_map(self, handler, mock_auth, mock_cache):
+        data = call_data("gpt-4o")
+        data["messages"] = [{"role": "user", "content": "No sensitive data here."}]
+
+        result = await handler.async_pre_call_hook(mock_auth, mock_cache, data, "completion")
+
+        assert _REDACTION_META_KEY not in (result.get("metadata") or {})
+
+
+# ---------------------------------------------------------------------------
+# Pre-call: response_format injection
+# ---------------------------------------------------------------------------
+
+class TestPreCallSchemaInjection:
+    async def test_injects_response_format(self, handler, mock_auth, mock_cache):
+        data = call_data("gpt-4o")
+
+        result = await handler.async_pre_call_hook(mock_auth, mock_cache, data, "completion")
+
+        assert result["response_format"] == RESPONSE_FORMAT_PARAM
+
+    async def test_does_not_overwrite_existing_format(self, handler, mock_auth, mock_cache):
+        custom_format = {"type": "json_object"}
+        data = call_data("gpt-4o")
+        data["response_format"] = custom_format
+
+        result = await handler.async_pre_call_hook(mock_auth, mock_cache, data, "completion")
+
+        assert result["response_format"] is custom_format
 
 
 # ---------------------------------------------------------------------------
