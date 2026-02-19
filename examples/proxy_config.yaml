@@ -1,0 +1,63 @@
+# proxy_config.yaml
+#
+# LiteLLM proxy configuration with A2A Settlement enabled.
+#
+# Prerequisites
+# -------------
+# 1. Register your payer (proxy/orchestrator) account on the exchange:
+#
+#       python -c "
+#       from a2a_settlement.client import SettlementExchangeClient
+#       c = SettlementExchangeClient('https://exchange.a2a-settlement.org')
+#       r = c.register_account(bot_name='MyProxy', developer_id='myorg',
+#                              developer_name='My Org', contact_email='me@example.com')
+#       print('API key:', r['api_key'])
+#       print('Account:', r['account']['id'])
+#       "
+#
+# 2. Register each downstream A2A agent and note their account IDs.
+#
+# 3. Set environment variables:
+#
+#       export A2A_PAYER_API_KEY=<your payer api key>
+#       export A2A_EXCHANGE_URL=https://exchange.a2a-settlement.org
+#
+# 4. Start the proxy:
+#
+#       litellm --config proxy_config.yaml
+#
+# -----------------------------------------------------------------------
+
+model_list:
+  # Standard LLM — no settlement triggered (not an a2a/ model)
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+
+  # A2A agent — settlement auto-triggered on every call
+  - model_name: a2a/web-scraper
+    litellm_params:
+      model: a2a/web-scraper
+      base_url: http://localhost:10001   # your agent's A2A endpoint
+
+  - model_name: a2a/data-analyst
+    litellm_params:
+      model: a2a/data-analyst
+      base_url: http://localhost:10002
+
+litellm_settings:
+  # Reference the module-level handler instance.
+  # Configure it entirely via environment variables (see above),
+  # or swap in a custom instance — see examples/programmatic_setup.py.
+  callbacks: litellm_a2a_settlement.handler.handler_instance
+
+  # Optional: turn off settlement without removing the callback
+  # (also controllable via A2A_SETTLEMENT_ENABLED=false env var)
+  # a2a_settlement_enabled: false
+
+environment_variables:
+  # Loaded from your shell environment — do not hard-code keys here.
+  A2A_EXCHANGE_URL: "https://exchange.a2a-settlement.org"
+  # A2A_PAYER_API_KEY: set in your shell, not here
+  A2A_DEFAULT_TOKENS_PER_CALL: "10"
+  A2A_DEFAULT_TTL_MINUTES: "60"
