@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 
 from litellm_a2a_settlement.prompts import (
+    DEFAULT_MAX_TRANSCRIPT_TOKENS,
     DEFAULT_RISK_LIMITS,
     build_mediator_messages,
     render_system_prompt,
+    truncate_transcript,
 )
 from litellm_a2a_settlement.schema import MEDIATOR_RESPONSE_SCHEMA
 
@@ -82,3 +84,31 @@ class TestDefaultRiskLimits:
     def test_has_required_keys(self):
         assert "max_settlement_amount_usd" in DEFAULT_RISK_LIMITS
         assert "allowed_dispute_categories" in DEFAULT_RISK_LIMITS
+
+
+class TestTruncateTranscript:
+    def test_short_transcript_unchanged(self):
+        text = "Party A: I agree."
+        assert truncate_transcript(text, max_tokens=1000) == text
+
+    def test_preserves_most_recent_lines(self):
+        lines = [f"[line {i}] data\n" for i in range(200)]
+        full = "".join(lines)
+        result = truncate_transcript(full, max_tokens=50)
+        assert "line 199" in result
+        assert "line 0" not in result
+
+    def test_truncation_marker_included(self):
+        lines = [f"[line {i}] {'x' * 40}\n" for i in range(200)]
+        full = "".join(lines)
+        result = truncate_transcript(full, max_tokens=50)
+        assert "earlier transcript truncated" in result
+
+    def test_default_budget_constant(self):
+        assert DEFAULT_MAX_TRANSCRIPT_TOKENS == 12_000
+
+    def test_build_messages_passes_max_tokens(self):
+        lines = [f"[{i}] content {'y' * 100}\n" for i in range(500)]
+        full = "".join(lines)
+        msgs = build_mediator_messages(full, max_transcript_tokens=100)
+        assert "truncated" in msgs[1]["content"]

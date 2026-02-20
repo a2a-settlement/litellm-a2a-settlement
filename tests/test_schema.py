@@ -7,6 +7,7 @@ import json
 import pytest
 
 from litellm_a2a_settlement.schema import (
+    DEFAULT_CONFIDENCE_THRESHOLD,
     MEDIATOR_RESPONSE_SCHEMA,
     RESPONSE_FORMAT_PARAM,
     MediatorResponseError,
@@ -164,3 +165,51 @@ class TestValidateResponseInvalid:
         })
         with pytest.raises(MediatorResponseError, match="Unexpected extra"):
             validate_response(raw)
+
+
+# ---------------------------------------------------------------------------
+# Confidence threshold → NEEDS_REVIEW
+# ---------------------------------------------------------------------------
+
+class TestConfidenceThreshold:
+    def test_default_threshold_value(self):
+        assert DEFAULT_CONFIDENCE_THRESHOLD == 0.85
+
+    def test_below_default_threshold_flags_review(self):
+        result = validate_response(_valid_json(confidence_interval=0.70))
+        assert result["decision"] == "NEEDS_REVIEW"
+
+    def test_at_threshold_stays_approved(self):
+        result = validate_response(_valid_json(confidence_interval=0.85))
+        assert result["decision"] == "APPROVED"
+
+    def test_above_threshold_stays_approved(self):
+        result = validate_response(_valid_json(confidence_interval=0.95))
+        assert result["decision"] == "APPROVED"
+
+    def test_rejected_below_threshold_becomes_review(self):
+        result = validate_response(
+            _valid_json(decision="REJECTED", confidence_interval=0.50),
+        )
+        assert result["decision"] == "NEEDS_REVIEW"
+
+    def test_custom_threshold(self):
+        result = validate_response(
+            _valid_json(confidence_interval=0.70),
+            confidence_threshold=0.60,
+        )
+        assert result["decision"] == "APPROVED"
+
+    def test_threshold_zero_disables_check(self):
+        result = validate_response(
+            _valid_json(confidence_interval=0.01),
+            confidence_threshold=0.0,
+        )
+        assert result["decision"] == "APPROVED"
+
+    def test_threshold_one_flags_everything_below(self):
+        result = validate_response(
+            _valid_json(confidence_interval=0.99),
+            confidence_threshold=1.0,
+        )
+        assert result["decision"] == "NEEDS_REVIEW"

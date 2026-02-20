@@ -4,15 +4,34 @@ Strips sensitive data from payloads before they reach the LLM, replacing
 each occurrence with a deterministic generic token so that the LLM can still
 reason about entity relationships without seeing raw values.
 
-Token format:  ``[REDACTED_<CATEGORY>_<N>]``  (e.g. ``[REDACTED_EMAIL_1]``)
+Token format:  ``[REDACTED_<CATEGORY>_<N>:<hash>]``
+(e.g. ``[REDACTED_EMAIL_1:a3f2c8]``)
+
+The trailing 6-hex-char hash is a truncated SHA-256 of the original value.
+This allows the LLM to recognise that *something* was present and to correlate
+repeated references without ever seeing the raw data.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
+
+
+def _short_hash(value: str) -> str:
+    """Return a 6-character hex digest of *value* for redaction tokens."""
+    return hashlib.sha256(value.encode()).hexdigest()[:6]
+
+
+class RedactionError(RuntimeError):
+    """Raised when the redaction filter fails.
+
+    Under the fail-closed policy the entire LLM call MUST be aborted when
+    this exception is raised rather than sending raw data to the model.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +171,8 @@ class PiiRedactor:
                     return seen[value]
                 count = counters.get(_cat, 0) + 1
                 counters[_cat] = count
-                token = f"[REDACTED_{_cat}_{count}]"
+                digest = _short_hash(value)
+                token = f"[REDACTED_{_cat}_{count}:{digest}]"
                 seen[value] = token
                 token_map[token] = value
                 return token

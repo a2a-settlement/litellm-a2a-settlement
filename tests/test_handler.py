@@ -14,6 +14,7 @@ from litellm_a2a_settlement.handler import (
     _REDACTION_META_KEY,
     _infer_task_type,
 )
+from litellm_a2a_settlement.redaction import RedactionError
 from litellm_a2a_settlement.schema import RESPONSE_FORMAT_PARAM
 
 
@@ -254,6 +255,15 @@ class TestPreCallRedaction:
         result = await handler.async_pre_call_hook(mock_auth, mock_cache, data, "completion")
 
         assert _REDACTION_META_KEY not in (result.get("metadata") or {})
+
+    async def test_redaction_failure_aborts_call(self, mock_auth, mock_cache, config):
+        with patch("litellm_a2a_settlement.handler.SettlementExchangeClient"):
+            h = SettlementHandler(config)
+            h._client = MagicMock()
+        with patch("litellm_a2a_settlement.handler.redact_payload", side_effect=RuntimeError("regex engine exploded")):
+            data = call_data("gpt-4o")
+            with pytest.raises(RedactionError, match="call aborted"):
+                await h.async_pre_call_hook(mock_auth, mock_cache, data, "completion")
 
 
 # ---------------------------------------------------------------------------

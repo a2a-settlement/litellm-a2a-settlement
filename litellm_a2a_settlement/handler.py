@@ -18,7 +18,7 @@ from typing import Any
 from a2a_settlement.client import SettlementExchangeClient
 
 from .config import SettlementConfig
-from .redaction import PiiRedactor, redact_payload
+from .redaction import PiiRedactor, RedactionError, redact_payload
 from .schema import inject_response_format
 
 try:
@@ -87,6 +87,8 @@ class SettlementHandler(CustomLogger):
         model: str = data.get("model", "")
 
         # --- PII redaction (runs for ALL models, not just a2a/) -----------
+        # Fail-closed: if redaction raises, wrap in RedactionError and let it
+        # propagate so the call is aborted rather than sending raw PII.
         try:
             token_map = redact_payload(data, self._redactor)
             if token_map:
@@ -97,8 +99,15 @@ class SettlementHandler(CustomLogger):
                     "Redacted %d PII token(s) from payload for %s",
                     len(token_map), model,
                 )
-        except Exception:
-            logger.warning("PII redaction failed — proceeding unredacted", exc_info=True)
+        except Exception as exc:
+            logger.error(
+                "PII redaction failed for %s — aborting call (fail-closed policy)",
+                model, exc_info=True,
+            )
+            raise RedactionError(
+                f"PII redaction failed for model {model}; call aborted to "
+                f"prevent raw data from reaching the LLM."
+            ) from exc
 
         # --- Structured JSON output enforcement ---------------------------
         inject_response_format(data)

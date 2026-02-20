@@ -18,6 +18,7 @@ from litellm_a2a_settlement.redaction import (
     VERIFIABLE_CREDENTIAL,
     PiiRedactor,
     RedactionResult,
+    _short_hash,
     redact_message_content,
     redact_payload,
 )
@@ -31,21 +32,25 @@ class TestPiiRedactorEmail:
     def test_single_email(self):
         r = PiiRedactor()
         result = r.redact("Contact alice@example.com for details.")
-        assert "[REDACTED_EMAIL_1]" in result.redacted_text
+        digest = _short_hash("alice@example.com")
+        expected_token = f"[REDACTED_EMAIL_1:{digest}]"
+        assert expected_token in result.redacted_text
         assert "alice@example.com" not in result.redacted_text
-        assert result.token_map["[REDACTED_EMAIL_1]"] == "alice@example.com"
+        assert result.token_map[expected_token] == "alice@example.com"
 
     def test_multiple_emails(self):
         r = PiiRedactor()
         result = r.redact("From alice@a.com to bob@b.org about it.")
-        assert "[REDACTED_EMAIL_1]" in result.redacted_text
-        assert "[REDACTED_EMAIL_2]" in result.redacted_text
+        assert "REDACTED_EMAIL_1:" in result.redacted_text
+        assert "REDACTED_EMAIL_2:" in result.redacted_text
         assert len(result.token_map) == 2
 
     def test_duplicate_email_reuses_token(self):
         r = PiiRedactor()
         result = r.redact("alice@a.com cc alice@a.com")
-        assert result.redacted_text.count("[REDACTED_EMAIL_1]") == 2
+        digest = _short_hash("alice@a.com")
+        expected_token = f"[REDACTED_EMAIL_1:{digest}]"
+        assert result.redacted_text.count(expected_token) == 2
         assert len(result.token_map) == 1
 
 
@@ -53,7 +58,7 @@ class TestPiiRedactorSSN:
     def test_ssn_pattern(self):
         r = PiiRedactor()
         result = r.redact("SSN: 123-45-6789")
-        assert "[REDACTED_SSN_1]" in result.redacted_text
+        assert "REDACTED_SSN_1:" in result.redacted_text
         assert "123-45-6789" not in result.redacted_text
 
 
@@ -75,7 +80,7 @@ class TestPiiRedactorWallets:
         r = PiiRedactor()
         addr = "0x" + "a1" * 20
         result = r.redact(f"Send to {addr}")
-        assert "[REDACTED_ETH_WALLET_1]" in result.redacted_text
+        assert "REDACTED_ETH_WALLET_1:" in result.redacted_text
         assert addr not in result.redacted_text
 
     def test_bitcoin_address_legacy(self):
@@ -98,7 +103,7 @@ class TestPiiRedactorVC:
         vc = '{"@context": "https://www.w3.org/2018/credentials/v1", "type": ["VerifiableCredential"], "credentialSubject": {"id": "did:example:123"}}'
         result = r.redact(f"Here is the credential: {vc}")
         assert "@context" not in result.redacted_text
-        assert "[REDACTED_VERIFIABLE_CREDENTIAL_1]" in result.redacted_text
+        assert "REDACTED_VERIFIABLE_CREDENTIAL_1:" in result.redacted_text
 
     def test_jwt_token(self):
         r = PiiRedactor()

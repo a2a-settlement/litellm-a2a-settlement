@@ -2,6 +2,12 @@
 
 Defines the canonical response schema and provides helpers to inject
 response_format into a LiteLLM call and validate responses post-hoc.
+
+The ``validate_response`` function supports an optional *confidence_threshold*
+parameter (default **0.85**).  When the LLM's ``confidence_interval`` falls
+below this threshold the validated payload's ``decision`` is automatically
+upgraded to ``"NEEDS_REVIEW"`` so downstream consumers can route the
+settlement to a human reviewer or secondary validation agent.
 """
 
 from __future__ import annotations
@@ -9,6 +15,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+DEFAULT_CONFIDENCE_THRESHOLD: float = 0.85
 
 MEDIATOR_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -65,12 +72,33 @@ class MediatorResponseError(ValueError):
     """Raised when the model response does not match the expected schema."""
 
 
-def validate_response(raw: str) -> dict[str, Any]:
+def validate_response(
+    raw: str,
+    *,
+    confidence_threshold: float | None = None,
+) -> dict[str, Any]:
     """Parse and validate a raw JSON string against the Mediator schema.
 
+    Parameters
+    ----------
+    raw:
+        The raw JSON string from the LLM.
+    confidence_threshold:
+        If provided, any response whose ``confidence_interval`` is strictly
+        below this value will have its ``decision`` set to ``"NEEDS_REVIEW"``
+        regardless of the LLM's original verdict.  Pass ``None`` to use
+        :data:`DEFAULT_CONFIDENCE_THRESHOLD` (0.85).  Pass ``0.0`` to
+        disable the check entirely.
+
     Returns the parsed dict on success; raises MediatorResponseError on
-    any violation.
+    any violation.  The returned dict may contain ``decision == "NEEDS_REVIEW"``
+    which is *not* part of the LLM schema but is injected post-validation.
     """
+    threshold = (
+        confidence_threshold if confidence_threshold is not None
+        else DEFAULT_CONFIDENCE_THRESHOLD
+    )
+
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -108,5 +136,8 @@ def validate_response(raw: str) -> dict[str, Any]:
     extra = set(payload.keys()) - {"decision", "confidence_interval", "reasoning_summary"}
     if extra:
         raise MediatorResponseError(f"Unexpected extra fields: {extra}")
+
+    if ci < threshold:
+        payload["decision"] = "NEEDS_REVIEW"
 
     return payload
