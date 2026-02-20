@@ -70,16 +70,32 @@ def call_data(model: str, call_id: str = "call-abc", metadata: dict | None = Non
     }
 
 
-def success_kwargs(model: str, escrow_id: str):
+def success_kwargs(
+    model: str,
+    escrow_id: str,
+    redaction_map: dict[str, str] | None = None,
+):
+    meta = {
+        _ESCROW_META_KEY: escrow_id,
+        _MODEL_META_KEY: model,
+    }
+    if redaction_map is not None:
+        meta[_REDACTION_META_KEY] = redaction_map
     return {
         "model": model,
-        "litellm_params": {
-            "metadata": {
-                _ESCROW_META_KEY: escrow_id,
-                _MODEL_META_KEY: model,
-            }
-        },
+        "litellm_params": {"metadata": meta},
     }
+
+
+def _mock_response(content: str | None) -> MagicMock:
+    """Build a minimal mock that mimics ``litellm.ModelResponse``."""
+    resp = MagicMock()
+    if content is not None:
+        resp.choices = [MagicMock()]
+        resp.choices[0].message.content = content
+    else:
+        resp.choices = []
+    return resp
 
 
 def failure_kwargs(model: str, escrow_id: str, exception: Exception | None = None):
@@ -304,3 +320,55 @@ class TestInferTaskType:
 
     def test_empty_string(self):
         assert _infer_task_type("") == "a2a-task"
+
+
+# ---------------------------------------------------------------------------
+# Success hook: output PII scanning (double-pass)
+# ---------------------------------------------------------------------------
+
+class TestSuccessHookOutputScan:
+    async def test_clean_response_releases_escrow(self, handler):
+        handler._client.release_escrow.return_value = {"amount_paid": 25}
+        kwargs = success_kwargs("a2a/scraper", "esc_001")
+        resp = _mock_response("Settlement APPROVED with high confidence.")
+
+        await handler.async_log_success_event(kwargs, resp, None, None)
+
+        handler._client.release_escrow.assert_called_once_with(escrow_id="esc_001")
+        handler._client.refund_escrow.assert_not_called()
+
+    async def test_pii_leak_in_response_refunds_escrow(self, handler):
+        handler._client.refund_escrow.return_value = {"amount_returned": 25}
+        kwargs = success_kwargs("a2a/scraper", "esc_001")
+        resp = _mock_response(
+            "The claimant alice@leaked.com should receive payment."
+        )
+
+        await handler.async_log_success_event(kwargs, resp, None, None)
+
+        handler._client.refund_escrow.assert_called_once()
+        refund_kwargs = handler._client.refund_escrow.call_args.kwargs
+        assert refund_kwargs["escrow_id"] == "esc_001"
+        assert "PII leak" in refund_kwargs["reason"]
+        handler._client.release_escrow.assert_not_called()
+
+    async def test_echo_of_original_value_refunds_escrow(self, handler):
+        handler._client.refund_escrow.return_value = {"amount_returned": 25}
+        token_map = {"[REDACTED_SSN_1:abc123]": "123-45-6789"}
+        kwargs = success_kwargs("a2a/scraper", "esc_001", redaction_map=token_map)
+        resp = _mock_response("SSN is 123-45-6789 per records.")
+
+        await handler.async_log_success_event(kwargs, resp, None, None)
+
+        handler._client.refund_escrow.assert_called_once()
+        handler._client.release_escrow.assert_not_called()
+
+    async def test_missing_response_content_releases_normally(self, handler):
+        handler._client.release_escrow.return_value = {"amount_paid": 25}
+        kwargs = success_kwargs("a2a/scraper", "esc_001")
+        resp = _mock_response(None)
+
+        await handler.async_log_success_event(kwargs, resp, None, None)
+
+        handler._client.release_escrow.assert_called_once_with(escrow_id="esc_001")
+        handler._client.refund_escrow.assert_not_called()

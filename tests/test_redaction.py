@@ -8,6 +8,13 @@ from litellm_a2a_settlement.redaction import (
     EMAIL,
     ETH_WALLET,
     BTC_WALLET,
+    LTC_WALLET,
+    XRP_ADDRESS,
+    ADA_ADDRESS,
+    COSMOS_ADDRESS,
+    TRX_ADDRESS,
+    XMR_ADDRESS,
+    SOL_WALLET,
     SSN,
     PHONE,
     CREDIT_CARD,
@@ -17,10 +24,12 @@ from litellm_a2a_settlement.redaction import (
     JWT_CREDENTIAL,
     VERIFIABLE_CREDENTIAL,
     PiiRedactor,
+    PiiLeakScanResult,
     RedactionResult,
     _short_hash,
     redact_message_content,
     redact_payload,
+    scan_text_for_pii,
 )
 
 
@@ -196,3 +205,110 @@ class TestRedactPayload:
 
     def test_empty_messages_returns_empty(self):
         assert redact_payload({"model": "gpt-4o", "messages": []}) == {}
+
+
+# ---------------------------------------------------------------------------
+# Output scanning (double-pass)
+# ---------------------------------------------------------------------------
+
+class TestScanTextForPii:
+    def test_clean_output_returns_clean(self):
+        result = scan_text_for_pii("The settlement is APPROVED with high confidence.")
+        assert result.clean is True
+        assert result.findings == []
+
+    def test_detects_pii_pattern_in_output(self):
+        result = scan_text_for_pii(
+            "The claimant's email is alice@example.com which was referenced."
+        )
+        assert result.clean is False
+        assert len(result.findings) >= 1
+        assert any(f.source == "pattern" and f.category == "EMAIL" for f in result.findings)
+
+    def test_detects_original_value_echo(self):
+        token_map = {"[REDACTED_SSN_1:abc123]": "123-45-6789"}
+        text = "The SSN 123-45-6789 was found in records."
+        result = scan_text_for_pii(text, original_values=token_map)
+        assert result.clean is False
+        assert any(f.matched_text == "123-45-6789" for f in result.findings)
+
+    def test_mixed_findings(self):
+        token_map = {"[REDACTED_CUSTOM_1:abc123]": "Project Nightfall"}
+        text = "Project Nightfall and new email bob@evil.com appeared."
+        result = scan_text_for_pii(text, original_values=token_map)
+        assert result.clean is False
+        sources = {f.source for f in result.findings}
+        assert "pattern" in sources
+        assert "echo" in sources
+
+    def test_redaction_tokens_not_flagged(self):
+        text = (
+            "The decision references [REDACTED_EMAIL_1:a3f2c8] "
+            "and [REDACTED_SSN_1:d4e5f6] as relevant parties."
+        )
+        result = scan_text_for_pii(text)
+        assert result.clean is True
+
+    def test_echo_deduplicates_with_pattern(self):
+        """If a value is caught by both pattern and echo, only one finding."""
+        token_map = {"[REDACTED_EMAIL_1:aabbcc]": "alice@example.com"}
+        text = "Leaked: alice@example.com"
+        result = scan_text_for_pii(text, original_values=token_map)
+        assert result.clean is False
+        matched_texts = [f.matched_text for f in result.findings]
+        assert matched_texts.count("alice@example.com") == 1
+
+
+# ---------------------------------------------------------------------------
+# Expanded crypto wallet patterns
+# ---------------------------------------------------------------------------
+
+class TestPiiRedactorCryptoExpanded:
+    def test_litecoin_bech32(self):
+        r = PiiRedactor()
+        addr = "ltc1qw508d6qejxtdg4y5r3zarvary0c5xw7kgmn4n9"
+        result = r.redact(f"LTC: {addr}")
+        assert addr not in result.redacted_text
+        assert any("LTC_WALLET" in k for k in result.token_map)
+
+    def test_xrp_address(self):
+        r = PiiRedactor()
+        addr = "rN7Drz9TBajFrzBJFEn1p2hSgkDLDhHqcY"
+        result = r.redact(f"XRP: {addr}")
+        assert addr not in result.redacted_text
+        assert any("XRP_ADDRESS" in k for k in result.token_map)
+
+    def test_cardano_address(self):
+        r = PiiRedactor()
+        addr = "addr1" + "a" * 58
+        result = r.redact(f"ADA: {addr}")
+        assert addr not in result.redacted_text
+        assert any("ADA_ADDRESS" in k for k in result.token_map)
+
+    def test_cosmos_address(self):
+        r = PiiRedactor()
+        addr = "cosmos1" + "a" * 38
+        result = r.redact(f"ATOM: {addr}")
+        assert addr not in result.redacted_text
+        assert any("COSMOS_ADDRESS" in k for k in result.token_map)
+
+    def test_tron_address(self):
+        r = PiiRedactor()
+        addr = "T" + "A" * 33
+        result = r.redact(f"TRX: {addr}")
+        assert addr not in result.redacted_text
+        assert any("TRX_ADDRESS" in k for k in result.token_map)
+
+    def test_monero_address(self):
+        r = PiiRedactor()
+        addr = "4" + "A" * 94
+        result = r.redact(f"XMR: {addr}")
+        assert addr not in result.redacted_text
+        assert any("XMR_ADDRESS" in k for k in result.token_map)
+
+    def test_solana_now_active(self):
+        r = PiiRedactor()
+        addr = "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV"
+        result = r.redact(f"SOL: {addr}")
+        assert addr not in result.redacted_text
+        assert any("SOL_WALLET" in k for k in result.token_map)

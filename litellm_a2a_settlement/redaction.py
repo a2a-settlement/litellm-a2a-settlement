@@ -1,8 +1,8 @@
-"""Pre-processing redaction filter for PII, wallet addresses, and Verifiable Credentials.
+"""Redaction filter for PII, wallet addresses, and Verifiable Credentials.
 
-Strips sensitive data from payloads before they reach the LLM, replacing
-each occurrence with a deterministic generic token so that the LLM can still
-reason about entity relationships without seeing raw values.
+Provides both *input* redaction (strip sensitive data before it reaches the
+LLM) and *output* scanning (detect PII that the LLM leaked or hallucinated
+in its response).
 
 Token format:  ``[REDACTED_<CATEGORY>_<N>:<hash>]``
 (e.g. ``[REDACTED_EMAIL_1:a3f2c8]``)
@@ -65,6 +65,12 @@ _IP_V4 = re.compile(
 # Crypto wallet addresses
 _ETH_ADDRESS = re.compile(r"\b0x[0-9a-fA-F]{40}\b")
 _BTC_ADDRESS = re.compile(r"\b(?:bc1|[13])[a-zA-HJ-NP-Z0-9]{25,62}\b")
+_LTC_ADDRESS = re.compile(r"\bltc1[ac-hj-np-z02-9]{39,87}\b")
+_XRP_ADDRESS = re.compile(r"\br[1-9A-HJ-NP-Za-km-z]{24,34}\b")
+_ADA_ADDRESS = re.compile(r"\baddr1[a-z0-9]{58,120}\b")
+_COSMOS_ADDRESS = re.compile(r"\bcosmos1[a-z0-9]{38}\b")
+_TRX_ADDRESS = re.compile(r"\bT[A-Za-z1-9]{33}\b")
+_XMR_ADDRESS = re.compile(r"\b[48][0-9AB][1-9A-HJ-NP-Za-km-z]{93}\b")
 _SOLANA_ADDRESS = re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b")
 
 # W3C Verifiable Credential JSON blobs — match objects containing the
@@ -96,6 +102,12 @@ DOB = "DOB"
 IP_ADDRESS = "IP_ADDRESS"
 ETH_WALLET = "ETH_WALLET"
 BTC_WALLET = "BTC_WALLET"
+LTC_WALLET = "LTC_WALLET"
+XRP_ADDRESS = "XRP_ADDRESS"
+ADA_ADDRESS = "ADA_ADDRESS"
+COSMOS_ADDRESS = "COSMOS_ADDRESS"
+TRX_ADDRESS = "TRX_ADDRESS"
+XMR_ADDRESS = "XMR_ADDRESS"
 SOL_WALLET = "SOL_WALLET"
 VERIFIABLE_CREDENTIAL = "VERIFIABLE_CREDENTIAL"
 JWT_CREDENTIAL = "JWT_CREDENTIAL"
@@ -110,6 +122,13 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (IP_ADDRESS, _IP_V4),
     (ETH_WALLET, _ETH_ADDRESS),
     (BTC_WALLET, _BTC_ADDRESS),
+    (LTC_WALLET, _LTC_ADDRESS),
+    (ADA_ADDRESS, _ADA_ADDRESS),
+    (COSMOS_ADDRESS, _COSMOS_ADDRESS),
+    (XRP_ADDRESS, _XRP_ADDRESS),
+    (TRX_ADDRESS, _TRX_ADDRESS),
+    (XMR_ADDRESS, _XMR_ADDRESS),
+    (SOL_WALLET, _SOLANA_ADDRESS),  # broad base58 pattern — keep last
     (DID_ID, _DID),
     (JWT_CREDENTIAL, _JWT_TOKEN),
     (VERIFIABLE_CREDENTIAL, _VC_JSON_BLOCK),
@@ -120,12 +139,33 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 # Redactor
 # ---------------------------------------------------------------------------
 
+_REDACTION_TOKEN_RE = re.compile(r"\[REDACTED_[A-Z_]+_\d+:[0-9a-f]{6}\]")
+_TOKEN_CATEGORY_RE = re.compile(r"\[REDACTED_(.+)_\d+:[0-9a-f]{6}\]")
+
+
 @dataclass
 class RedactionResult:
     """Holds the redacted text and a mapping from tokens back to originals."""
 
     redacted_text: str
     token_map: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class PiiLeakFinding:
+    """A single PII leak detected in LLM output."""
+
+    category: str
+    matched_text: str
+    source: str  # "pattern" or "echo"
+
+
+@dataclass
+class PiiLeakScanResult:
+    """Aggregated result of scanning LLM output for PII leaks."""
+
+    clean: bool
+    findings: list[PiiLeakFinding] = field(default_factory=list)
 
 
 class PiiRedactor:
@@ -237,3 +277,67 @@ def redact_payload(
     redacted, token_map = redact_message_content(messages, redactor)
     data["messages"] = redacted
     return token_map
+
+
+# ---------------------------------------------------------------------------
+# Output scanning (double-pass)
+# ---------------------------------------------------------------------------
+
+
+def _extract_token_category(token: str) -> str:
+    """Extract the category name from a ``[REDACTED_<CAT>_<N>:<hash>]`` token."""
+    m = _TOKEN_CATEGORY_RE.match(token)
+    return m.group(1) if m else "UNKNOWN"
+
+
+def scan_text_for_pii(
+    text: str,
+    redactor: PiiRedactor | None = None,
+    original_values: dict[str, str] | None = None,
+) -> PiiLeakScanResult:
+    """Scan *text* (typically LLM output) for PII leaks.
+
+    Two independent checks are performed:
+
+    1. **Pattern scan** -- runs the full regex suite against *text* (after
+       stripping any legitimate ``[REDACTED_...]`` tokens so they don't
+       trigger false positives).
+    2. **Echo check** -- verifies that none of the original pre-redaction
+       values from *original_values* (the token-map returned by
+       ``redact_payload``) appear verbatim in *text*.
+
+    Parameters
+    ----------
+    text:
+        The string to scan (e.g. ``response_obj.choices[0].message.content``).
+    redactor:
+        A ``PiiRedactor`` instance.  Falls back to the module default.
+    original_values:
+        The ``{token: original}`` map returned by the input-redaction pass.
+        When provided, each original value is checked for verbatim presence
+        in *text*.
+    """
+    r = redactor or _DEFAULT_REDACTOR
+    findings: list[PiiLeakFinding] = []
+
+    cleaned = _REDACTION_TOKEN_RE.sub("", text)
+
+    result = r.redact(cleaned)
+    for token, original in result.token_map.items():
+        findings.append(PiiLeakFinding(
+            category=_extract_token_category(token),
+            matched_text=original,
+            source="pattern",
+        ))
+
+    if original_values:
+        already_found = {f.matched_text for f in findings}
+        for token, original in original_values.items():
+            if original in text and original not in already_found:
+                findings.append(PiiLeakFinding(
+                    category=_extract_token_category(token),
+                    matched_text=original,
+                    source="echo",
+                ))
+
+    return PiiLeakScanResult(clean=len(findings) == 0, findings=findings)

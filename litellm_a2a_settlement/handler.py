@@ -18,7 +18,7 @@ from typing import Any
 from a2a_settlement.client import SettlementExchangeClient
 
 from .config import SettlementConfig
-from .redaction import PiiRedactor, RedactionError, redact_payload
+from .redaction import PiiRedactor, RedactionError, redact_payload, scan_text_for_pii
 from .schema import inject_response_format
 
 try:
@@ -166,6 +166,42 @@ class SettlementHandler(CustomLogger):
         escrow_id, model = _extract_escrow_meta(kwargs)
         if not escrow_id:
             return
+
+        # --- Double-pass: scan LLM output for PII leaks -------------------
+        response_text = _extract_response_text(response_obj)
+        if response_text:
+            token_map = _extract_redaction_map(kwargs)
+            scan = scan_text_for_pii(
+                response_text,
+                redactor=self._redactor,
+                original_values=token_map,
+            )
+            if not scan.clean:
+                categories = {f.category for f in scan.findings}
+                logger.warning(
+                    "PII leak detected in LLM response for %s "
+                    "(escrow %s): %d finding(s) in categories %s — "
+                    "refunding instead of releasing",
+                    model or "agent", escrow_id,
+                    len(scan.findings), categories,
+                )
+                try:
+                    result = await asyncio.to_thread(
+                        self._client.refund_escrow,
+                        escrow_id=escrow_id,
+                        reason="PII leak detected in LLM response",
+                    )
+                    logger.info(
+                        "Escrow %s refunded (PII leak): %d tokens returned",
+                        escrow_id, result.get("amount_returned", 0),
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to refund escrow %s after PII leak",
+                        escrow_id, exc_info=True,
+                    )
+                return
+
         try:
             result = await asyncio.to_thread(
                 self._client.release_escrow, escrow_id=escrow_id,
@@ -224,6 +260,24 @@ def _infer_task_type(model: str) -> str:
         _, name = model.split("/", 1)
         return name
     return model or "a2a-task"
+
+
+def _extract_response_text(response_obj: Any) -> str | None:
+    """Best-effort extraction of the text content from a LiteLLM ModelResponse."""
+    try:
+        return response_obj.choices[0].message.content  # type: ignore[union-attr]
+    except (AttributeError, IndexError, TypeError):
+        return None
+
+
+def _extract_redaction_map(kwargs: dict) -> dict[str, str] | None:
+    """Retrieve the token map stashed during the pre-call redaction pass."""
+    metadata: dict = (
+        kwargs.get("litellm_params", {}).get("metadata")
+        or kwargs.get("metadata")
+        or {}
+    )
+    return metadata.get(_REDACTION_META_KEY)
 
 
 #: Default handler instance. Configure via environment variables.
