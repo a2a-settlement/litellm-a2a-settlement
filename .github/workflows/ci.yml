@@ -18,12 +18,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
       - name: Install a2a-settlement from Git (sdk subdirectory)
-        run: pip install "a2a-settlement @ git+https://github.com/a2a-settlement/a2a-settlement.git@main#subdirectory=sdk"
+        run: python -m pip install "a2a-settlement @ git+https://github.com/a2a-settlement/a2a-settlement.git@main#subdirectory=sdk"
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev]" pytest-cov
+      - name: Verify pytest-cov plugin
+        run: python -m pip show pytest-cov
       - name: Run tests
-        run: pytest --cov=litellm_a2a_settlement --cov-report=xml --cov-report=term-missing -q
+        run: python -m pytest --cov=litellm_a2a_settlement --cov-report=xml --cov-report=term-missing -q
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
