@@ -28,13 +28,19 @@ pip install -e ".[dev]"
 ## Running tests
 
 ```bash
-pytest -q
+python -m pytest -q
 ```
 
 With coverage:
 
 ```bash
-pytest --cov=litellm_a2a_settlement --cov-report=term-missing -q
+python -m pytest --cov=litellm_a2a_settlement --cov-report=xml --cov-report=term-missing -q
+```
+
+To mirror the GitHub Actions CI job locally (including the a2a-settlement SDK Git install):
+
+```bash
+./ci-local.sh
 ```
 
 ## Code style
