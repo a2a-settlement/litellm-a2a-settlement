@@ -10,7 +10,7 @@ from litellm_a2a_settlement.config import AgentSettlementConfig, SettlementConfi
 class TestSettlementConfig:
     def test_defaults(self):
         cfg = SettlementConfig(payer_api_key="key123")
-        assert cfg.exchange_url == "https://exchange.a2a-settlement.org"
+        assert cfg.exchange_url == "https://sandbox.a2a-settlement.org"
         assert cfg.default_tokens_per_call == 10
         assert cfg.default_ttl_minutes == 60
         assert cfg.enabled is True

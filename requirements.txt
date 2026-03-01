@@ -2,3 +2,4 @@ litellm>=1.80.0
 a2a-settlement>=0.5.0
 pytest>=8.0
 pytest-asyncio>=0.23
+pytest-cov
