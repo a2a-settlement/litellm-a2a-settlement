@@ -13,3 +13,7 @@ dist/
 
 .ipynb_checkpoints/
 
+# Test/coverage artifacts
+.coverage
+coverage.xml
+
