@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass, field
 
 
-EXCHANGE_DEFAULT = "https://exchange.a2a-settlement.org"
+EXCHANGE_DEFAULT = "https://sandbox.a2a-settlement.org"
 
 
 def _env_bool(key: str, default: bool = True) -> bool:

@@ -2,6 +2,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://python.org)
+[![CI](https://github.com/a2a-settlement/litellm-a2a-settlement/actions/workflows/ci.yml/badge.svg)](https://github.com/a2a-settlement/litellm-a2a-settlement/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/a2a-settlement/litellm-a2a-settlement/graph/badge.svg)](https://codecov.io/gh/a2a-settlement/litellm-a2a-settlement)
 
 **Escrow-based settlement for LiteLLM A2A agent calls.**
 
@@ -31,7 +33,7 @@ This package wires that SDK into LiteLLM's callback system.
 | Concern | Package |
 |---|---|
 | Settlement protocol & spec | `a2a-settlement` |
-| Exchange (the running service) | `exchange.a2a-settlement.org` |
+| Exchange (the running service) | `sandbox.a2a-settlement.org` (default for testing), production at `exchange.a2a-settlement.org` |
 | Python SDK | `a2a-settlement` (pip) |
 | **LiteLLM integration** | **`litellm-a2a-settlement`** (this package) |
 
@@ -48,7 +50,7 @@ pip install litellm-a2a-settlement
 ```python
 from a2a_settlement.client import SettlementExchangeClient
 
-c = SettlementExchangeClient("https://exchange.a2a-settlement.org")
+c = SettlementExchangeClient("https://sandbox.a2a-settlement.org")
 r = c.register_account(
     bot_name="MyProxy",
     developer_id="myorg",
@@ -64,7 +66,7 @@ print("Account:", r["account"]["id"])
 **3. Set environment variables:**
 
 ```bash
-export A2A_EXCHANGE_URL=https://exchange.a2a-settlement.org
+export A2A_EXCHANGE_URL=https://sandbox.a2a-settlement.org
 export A2A_PAYER_API_KEY=<your payer api key>
 ```
 
@@ -124,7 +126,7 @@ Standard LLM calls (`gpt-4o`, `claude-3-5-sonnet`, etc.) are never settled.
 
 | Variable | Default | Description |
 |---|---|---|
-| `A2A_EXCHANGE_URL` | `https://exchange.a2a-settlement.org` | Exchange base URL |
+| `A2A_EXCHANGE_URL` | `https://sandbox.a2a-settlement.org` | Exchange base URL |
 | `A2A_PAYER_API_KEY` | — | Payer account API key (required) |
 | `A2A_DEFAULT_TOKENS_PER_CALL` | `10` | Tokens escrowed per call |
 | `A2A_DEFAULT_TTL_MINUTES` | `60` | Escrow expiry |
