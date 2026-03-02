@@ -126,7 +126,7 @@ Standard LLM calls (`gpt-4o`, `claude-3-5-sonnet`, etc.) are never settled.
 
 | Variable | Default | Description |
 |---|---|---|
-| `A2A_EXCHANGE_URL` | `https://sandbox.a2a-settlement.org` | Exchange base URL |
+| `A2A_EXCHANGE_URL` | `https://sandbox.a2a-settlement.org` | Exchange base URL (no `/v1`) |
 | `A2A_PAYER_API_KEY` | — | Payer account API key (required) |
 | `A2A_DEFAULT_TOKENS_PER_CALL` | `10` | Tokens escrowed per call |
 | `A2A_DEFAULT_TTL_MINUTES` | `60` | Escrow expiry |
@@ -143,6 +143,16 @@ the agent call proceeds normally and a warning is logged.
 pip install -e ".[dev]"
 pytest -q
 ```
+
+## Related Projects
+
+| Project | Description |
+|---------|-------------|
+| [a2a-settlement](https://github.com/a2a-settlement/a2a-settlement) | Core exchange + SDK |
+| [langgraph-a2a-settlement](https://github.com/a2a-settlement/langgraph-a2a-settlement) | LangGraph integration |
+| [crewai-a2a-settlement](https://github.com/a2a-settlement/crewai-a2a-settlement) | CrewAI integration |
+| [adk-a2a-settlement](https://github.com/a2a-settlement/adk-a2a-settlement) | Google ADK integration |
+| [a2a-settlement-mcp](https://github.com/a2a-settlement/a2a-settlement-mcp) | MCP server for any client |
 
 ## License
 
