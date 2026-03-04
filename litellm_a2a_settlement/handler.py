@@ -30,13 +30,13 @@ try:
     from litellm.proxy.proxy_server import UserAPIKeyAuth, DualCache
 except ImportError:
     UserAPIKeyAuth = Any  # type: ignore[assignment,misc]
-    DualCache = Any       # type: ignore[assignment,misc]
+    DualCache = Any  # type: ignore[assignment,misc]
 
 logger = logging.getLogger("a2a_settlement.litellm")
 
-_ESCROW_META_KEY     = "_a2a_se_escrow_id"
-_MODEL_META_KEY      = "_a2a_se_model"
-_REDACTION_META_KEY  = "_a2a_se_redaction_map"
+_ESCROW_META_KEY = "_a2a_se_escrow_id"
+_MODEL_META_KEY = "_a2a_se_model"
+_REDACTION_META_KEY = "_a2a_se_redaction_map"
 
 
 class SettlementHandler(CustomLogger):
@@ -97,12 +97,14 @@ class SettlementHandler(CustomLogger):
                 data["metadata"][_REDACTION_META_KEY] = token_map
                 logger.info(
                     "Redacted %d PII token(s) from payload for %s",
-                    len(token_map), model,
+                    len(token_map),
+                    model,
                 )
         except Exception as exc:
             logger.error(
                 "PII redaction failed for %s — aborting call (fail-closed policy)",
-                model, exc_info=True,
+                model,
+                exc_info=True,
             )
             raise RedactionError(
                 f"PII redaction failed for model {model}; call aborted to "
@@ -124,10 +126,12 @@ class SettlementHandler(CustomLogger):
             logger.debug("No provider_id for %s — skipping escrow", model)
             return data
 
-        task_id   = data.get("litellm_call_id") or f"litellm-{uuid.uuid4().hex[:12]}"
-        tokens    = self.config.tokens_for(model)
-        ttl       = self.config.ttl_for(model)
+        task_id = data.get("litellm_call_id") or f"litellm-{uuid.uuid4().hex[:12]}"
+        tokens = self.config.tokens_for(model)
+        ttl = self.config.ttl_for(model)
         task_type = self.config.task_type_for(model) or _infer_task_type(model)
+
+        attestation = self.config.attestation_level_for(model)
 
         try:
             escrow = await asyncio.to_thread(
@@ -137,23 +141,28 @@ class SettlementHandler(CustomLogger):
                 task_id=task_id,
                 task_type=task_type,
                 ttl_minutes=ttl,
+                required_attestation_level=attestation,
             )
             escrow_id = escrow["escrow_id"]
             logger.info(
                 "Escrow %s created: %d tokens held for %s (task %s)",
-                escrow_id, tokens, model, task_id,
+                escrow_id,
+                tokens,
+                model,
+                task_id,
             )
         except Exception:
             logger.warning(
                 "Failed to create escrow for %s — proceeding without settlement",
-                model, exc_info=True,
+                model,
+                exc_info=True,
             )
             return data
 
         if "metadata" not in data or data["metadata"] is None:
             data["metadata"] = {}
         data["metadata"][_ESCROW_META_KEY] = escrow_id
-        data["metadata"][_MODEL_META_KEY]  = model
+        data["metadata"][_MODEL_META_KEY] = model
         return data
 
     # ------------------------------------------------------------------
@@ -161,7 +170,11 @@ class SettlementHandler(CustomLogger):
     # ------------------------------------------------------------------
 
     async def async_log_success_event(
-        self, kwargs: dict, response_obj: Any, start_time: Any, end_time: Any,
+        self,
+        kwargs: dict,
+        response_obj: Any,
+        start_time: Any,
+        end_time: Any,
     ) -> None:
         escrow_id, model = _extract_escrow_meta(kwargs)
         if not escrow_id:
@@ -182,8 +195,10 @@ class SettlementHandler(CustomLogger):
                     "PII leak detected in LLM response for %s "
                     "(escrow %s): %d finding(s) in categories %s — "
                     "refunding instead of releasing",
-                    model or "agent", escrow_id,
-                    len(scan.findings), categories,
+                    model or "agent",
+                    escrow_id,
+                    len(scan.findings),
+                    categories,
                 )
                 try:
                     result = await asyncio.to_thread(
@@ -193,22 +208,27 @@ class SettlementHandler(CustomLogger):
                     )
                     logger.info(
                         "Escrow %s refunded (PII leak): %d tokens returned",
-                        escrow_id, result.get("amount_returned", 0),
+                        escrow_id,
+                        result.get("amount_returned", 0),
                     )
                 except Exception:
                     logger.warning(
                         "Failed to refund escrow %s after PII leak",
-                        escrow_id, exc_info=True,
+                        escrow_id,
+                        exc_info=True,
                     )
                 return
 
         try:
             result = await asyncio.to_thread(
-                self._client.release_escrow, escrow_id=escrow_id,
+                self._client.release_escrow,
+                escrow_id=escrow_id,
             )
             logger.info(
                 "Escrow %s released: %d tokens paid to %s",
-                escrow_id, result.get("amount_paid", 0), model or "agent",
+                escrow_id,
+                result.get("amount_paid", 0),
+                model or "agent",
             )
         except Exception:
             logger.warning("Failed to release escrow %s", escrow_id, exc_info=True)
@@ -218,7 +238,11 @@ class SettlementHandler(CustomLogger):
     # ------------------------------------------------------------------
 
     async def async_log_failure_event(
-        self, kwargs: dict, response_obj: Any, start_time: Any, end_time: Any,
+        self,
+        kwargs: dict,
+        response_obj: Any,
+        start_time: Any,
+        end_time: Any,
     ) -> None:
         escrow_id, model = _extract_escrow_meta(kwargs)
         if not escrow_id:
@@ -233,8 +257,10 @@ class SettlementHandler(CustomLogger):
             )
             logger.info(
                 "Escrow %s refunded: %d tokens returned (%s failed: %s)",
-                escrow_id, result.get("amount_returned", 0),
-                model or "agent", reason[:80],
+                escrow_id,
+                result.get("amount_returned", 0),
+                model or "agent",
+                reason[:80],
             )
         except Exception:
             logger.warning("Failed to refund escrow %s", escrow_id, exc_info=True)
@@ -244,12 +270,11 @@ class SettlementHandler(CustomLogger):
 # Private helpers
 # ------------------------------------------------------------------
 
+
 def _extract_escrow_meta(kwargs: dict) -> tuple[str | None, str | None]:
     """Pull stashed escrow_id and model out of litellm kwargs."""
     metadata: dict = (
-        kwargs.get("litellm_params", {}).get("metadata")
-        or kwargs.get("metadata")
-        or {}
+        kwargs.get("litellm_params", {}).get("metadata") or kwargs.get("metadata") or {}
     )
     return metadata.get(_ESCROW_META_KEY), metadata.get(_MODEL_META_KEY)
 
@@ -273,9 +298,7 @@ def _extract_response_text(response_obj: Any) -> str | None:
 def _extract_redaction_map(kwargs: dict) -> dict[str, str] | None:
     """Retrieve the token map stashed during the pre-call redaction pass."""
     metadata: dict = (
-        kwargs.get("litellm_params", {}).get("metadata")
-        or kwargs.get("metadata")
-        or {}
+        kwargs.get("litellm_params", {}).get("metadata") or kwargs.get("metadata") or {}
     )
     return metadata.get(_REDACTION_META_KEY)
 

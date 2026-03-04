@@ -24,6 +24,7 @@ class AgentSettlementConfig:
     tokens_per_call: int | None = None
     ttl_minutes: int | None = None
     task_type: str | None = None
+    required_attestation_level: str | None = None
 
 
 @dataclass
@@ -83,3 +84,8 @@ class SettlementConfig:
     def task_type_for(self, model: str) -> str | None:
         agent = self.agents.get(model)
         return agent.task_type if agent else None
+
+    def attestation_level_for(self, model: str) -> str | None:
+        """Return the required attestation level for a model, if configured."""
+        agent = self.agents.get(model)
+        return agent.required_attestation_level if agent else None

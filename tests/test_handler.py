@@ -121,6 +121,7 @@ class TestPreCallHook:
             task_id="call-abc",
             task_type="scraping",
             ttl_minutes=60,
+            required_attestation_level=None,
         )
         assert result["metadata"][_ESCROW_META_KEY] == "esc_001"
         assert result["metadata"][_MODEL_META_KEY] == "a2a/scraper"
